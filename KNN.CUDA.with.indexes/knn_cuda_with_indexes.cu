@@ -28,7 +28,7 @@
 
 
 // If the code is used in Matlab, set MATLAB_CODE to 1. Otherwise, set MATLAB_CODE to 0.
-#define MATLAB_CODE 1
+#define MATLAB_CODE 0
 
 
 // Includes
@@ -327,12 +327,13 @@ void knn(float* ref_host, int ref_width, float* query_host, int query_width, int
   size_t       ind_pitch_in_bytes;
   size_t       max_nb_query_traited;
   size_t       actual_nb_query_width;
-  unsigned int memory_total;
-  unsigned int memory_free;
+  size_t       memory_total;
+  size_t       memory_free;
 
 
   // Check if we can use texture memory for reference points
-  unsigned int use_texture = ( ref_width*size_of_float<=MAX_TEXTURE_WIDTH_IN_BYTES && height*size_of_float<=MAX_TEXTURE_HEIGHT_IN_BYTES );
+  bool use_texture = ( ref_width*size_of_float<=MAX_TEXTURE_WIDTH_IN_BYTES && height*size_of_float<=MAX_TEXTURE_HEIGHT_IN_BYTES );
+  printf("use_texture = %d\n", (int)use_texture);
 
   // CUDA Initialisation
   cuInit(0);
@@ -346,7 +347,8 @@ void knn(float* ref_host, int ref_width, float* query_host, int query_width, int
 
   // Determine maximum number of query that can be treated
   max_nb_query_traited = ( memory_free * MAX_PART_OF_FREE_MEMORY_USED - size_of_float * ref_width*height ) / ( size_of_float * (height + ref_width) + size_of_int * k);
-  max_nb_query_traited = min( query_width, (max_nb_query_traited / 16) * 16 );
+  max_nb_query_traited = min( query_width, ((int)max_nb_query_traited / 16) * 16 );
+  printf("max_nb_query_traited = %d\n", (int)max_nb_query_traited);
 
   // Allocation of global memory for query points and for distances
   result = cudaMallocPitch( (void **) &query_dev, &query_pitch_in_bytes, max_nb_query_traited * size_of_float, height + ref_width);
@@ -402,11 +404,17 @@ void knn(float* ref_host, int ref_width, float* query_host, int query_width, int
     cudaMemcpy2D(ref_dev, ref_pitch_in_bytes, ref_host, ref_width*size_of_float,  ref_width*size_of_float, height, cudaMemcpyHostToDevice);
   }
 
+  cudaEvent_t start, stop;
+  cudaEventCreate(&start);
+  cudaEventCreate(&stop);
+  float elapsed;
+
   // Split queries to fit in GPU memory
   for (int i=0; i<query_width; i+=max_nb_query_traited){
+    printf("i = %d:\n", i);
 
     // Number of query points considered
-    actual_nb_query_width = min( max_nb_query_traited, query_width-i );
+    actual_nb_query_width = min( (int)max_nb_query_traited, query_width-i );
 
     // Copy of part of query actually being treated
     cudaMemcpy2D(query_dev, query_pitch_in_bytes, &query_host[i], query_width*size_of_float, actual_nb_query_width*size_of_float, height, cudaMemcpyHostToDevice);
@@ -427,21 +435,39 @@ void knn(float* ref_host, int ref_width, float* query_host, int query_width, int
     if (k  %16 != 0) g_k_16x16.y += 1;
 
     // Kernel 1: Compute all the distances
+    cudaEventRecord(start);
     if (use_texture)
       cuComputeDistanceTexture<<<g_16x16,t_16x16>>>(ref_width, query_dev, actual_nb_query_width, query_pitch, height, dist_dev);
     else
       cuComputeDistanceGlobal<<<g_16x16,t_16x16>>>(ref_dev, ref_width, ref_pitch, query_dev, actual_nb_query_width, query_pitch, height, dist_dev);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&elapsed, start, stop);
+    printf("cuComputeDistance* %.3f ms\n", elapsed);
 
     // Kernel 2: Sort each column
+    cudaEventRecord(start);
     cuInsertionSort<<<g_256x1,t_256x1>>>(dist_dev, query_pitch, ind_dev, ind_pitch, actual_nb_query_width, ref_width, k);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&elapsed, start, stop);
+    printf("cuInsertionSort %.3f ms\n", elapsed);
 
     // Kernel 3: Compute square root of k first elements
+    cudaEventRecord(start);
     cuParallelSqrt<<<g_k_16x16,t_k_16x16>>>(dist_dev, query_width, query_pitch, k);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&elapsed, start, stop);
+    printf("cuParallelSqrt %.3f ms\n", elapsed);
 
     // Memory copy of output from device to host
     cudaMemcpy2D(&dist_host[i], query_width*size_of_float, dist_dev, query_pitch_in_bytes, actual_nb_query_width*size_of_float, k, cudaMemcpyDeviceToHost);
     cudaMemcpy2D(&ind_host[i],  query_width*size_of_int,   ind_dev,  ind_pitch_in_bytes,   actual_nb_query_width*size_of_int,   k, cudaMemcpyDeviceToHost);
   }
+
+  cudaEventDestroy(start);
+  cudaEventDestroy(stop);
 
   // Free memory
   if (use_texture)
@@ -528,7 +554,6 @@ int main(void){
   int    query_nb   = 4096;   // Query point number,     max=65535
   int    dim        = 32;     // Dimension of points
   int    k          = 20;     // Nearest neighbors to consider
-  int    iterations = 100;
   int    i;
 
   // Memory allocation
@@ -542,31 +567,17 @@ int main(void){
   for (i=0 ; i<ref_nb   * dim ; i++) ref[i]    = (float)rand() / (float)RAND_MAX;
   for (i=0 ; i<query_nb * dim ; i++) query[i]  = (float)rand() / (float)RAND_MAX;
 
-  // Variables for duration evaluation
-  cudaEvent_t start, stop;
-  cudaEventCreate(&start);
-  cudaEventCreate(&stop);
-  float elapsed_time;
-
   // Display informations
   printf("Number of reference points      : %6d\n", ref_nb  );
   printf("Number of query points          : %6d\n", query_nb);
   printf("Dimension of points             : %4d\n", dim     );
   printf("Number of neighbors to consider : %4d\n", k       );
-  printf("Processing kNN search           :"                );
+  printf("Processing kNN search           : \n"             );
 
   // Call kNN search CUDA
-  cudaEventRecord(start, 0);
-  for (i=0; i<iterations; i++)
-    knn(ref, ref_nb, query, query_nb, dim, k, dist, ind);
-  cudaEventRecord(stop, 0);
-  cudaEventSynchronize(stop);
-  cudaEventElapsedTime(&elapsed_time, start, stop);
-  printf(" done in %f s for %d iterations (%f s by iteration)\n", elapsed_time/1000, iterations, elapsed_time/(iterations*1000));
+  knn(ref, ref_nb, query, query_nb, dim, k, dist, ind);
 
-  // Destroy cuda event object and free memory
-  cudaEventDestroy(start);
-  cudaEventDestroy(stop);
+  // Free memory
   free(ind);
   free(dist);
   free(query);
