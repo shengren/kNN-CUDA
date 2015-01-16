@@ -404,6 +404,7 @@ void knn(float* ref_host, int ref_width, float* query_host, int query_width, int
     cudaMemcpy2D(ref_dev, ref_pitch_in_bytes, ref_host, ref_width*size_of_float,  ref_width*size_of_float, height, cudaMemcpyHostToDevice);
   }
 
+  cudaError_t err;
   cudaEvent_t start, stop;
   cudaEventCreate(&start);
   cudaEventCreate(&stop);
@@ -440,6 +441,12 @@ void knn(float* ref_host, int ref_width, float* query_host, int query_width, int
       cuComputeDistanceTexture<<<g_16x16,t_16x16>>>(ref_width, query_dev, actual_nb_query_width, query_pitch, height, dist_dev);
     else
       cuComputeDistanceGlobal<<<g_16x16,t_16x16>>>(ref_dev, ref_width, ref_pitch, query_dev, actual_nb_query_width, query_pitch, height, dist_dev);
+    cudaDeviceSynchronize();
+    err = cudaGetLastError();
+    if (err != cudaSuccess) {
+      printf("CUDA error: %s\n", cudaGetErrorString(err));
+      return;
+    }
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&elapsed, start, stop);
@@ -448,6 +455,12 @@ void knn(float* ref_host, int ref_width, float* query_host, int query_width, int
     // Kernel 2: Sort each column
     cudaEventRecord(start);
     cuInsertionSort<<<g_256x1,t_256x1>>>(dist_dev, query_pitch, ind_dev, ind_pitch, actual_nb_query_width, ref_width, k);
+    cudaDeviceSynchronize();
+    err = cudaGetLastError();
+    if (err != cudaSuccess) {
+      printf("CUDA error: %s\n", cudaGetErrorString(err));
+      return;
+    }
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&elapsed, start, stop);
@@ -456,6 +469,12 @@ void knn(float* ref_host, int ref_width, float* query_host, int query_width, int
     // Kernel 3: Compute square root of k first elements
     cudaEventRecord(start);
     cuParallelSqrt<<<g_k_16x16,t_k_16x16>>>(dist_dev, query_width, query_pitch, k);
+    cudaDeviceSynchronize();
+    err = cudaGetLastError();
+    if (err != cudaSuccess) {
+      printf("CUDA error: %s\n", cudaGetErrorString(err));
+      return;
+    }
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&elapsed, start, stop);
@@ -550,10 +569,10 @@ int main(void){
   float* query;               // Pointer to query point array
   float* dist;                // Pointer to distance array
   int*   ind;                 // Pointer to index array
-  int    ref_nb     = 4096;   // Reference point number, max=65535
-  int    query_nb   = 4096;   // Query point number,     max=65535
-  int    dim        = 32;     // Dimension of points
-  int    k          = 20;     // Nearest neighbors to consider
+  int    ref_nb     = 100000; // Reference point number, max=65535
+  int    query_nb   = 100;    // Query point number,     max=65535
+  int    dim        = 100;    // Dimension of points
+  int    k          = 100;    // Nearest neighbors to consider
   int    i;
 
   // Memory allocation
