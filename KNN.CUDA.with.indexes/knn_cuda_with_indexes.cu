@@ -572,7 +572,7 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]){
 /**
  * Example of use of kNN search CUDA.
  */
-int main(void){
+int main(int argc, char **argv){
 
   // Variables and parameters
   float* ref;                 // Pointer to reference point array
@@ -583,7 +583,6 @@ int main(void){
   int    query_nb   = 100;    // Query point number,     max=65535
   int    dim        = 100;    // Dimension of points
   int    k          = 100;    // Nearest neighbors to consider
-  int    i;
 
   // Memory allocation
   ref    = (float *) malloc(ref_nb   * dim * sizeof(float));
@@ -592,9 +591,13 @@ int main(void){
   ind    = (int *)   malloc(query_nb * k * sizeof(float));
 
   // Init
-  srand(time(NULL));
-  for (i=0 ; i<ref_nb   * dim ; i++) ref[i]    = (float)rand() / (float)RAND_MAX;
-  for (i=0 ; i<query_nb * dim ; i++) query[i]  = (float)rand() / (float)RAND_MAX;
+  FILE *file_reference = fopen(argv[1], "rb");
+  fread(ref, sizeof(float), ref_nb * dim, file_reference);
+  fclose(file_reference);
+
+  FILE *file_query = fopen(argv[2], "rb");
+  fread(query, sizeof(float), query_nb * dim, file_query);
+  fclose(file_query);
 
   // Display informations
   printf("Number of reference points      : %6d\n", ref_nb  );
@@ -605,6 +608,29 @@ int main(void){
 
   // Call kNN search CUDA
   knn(ref, ref_nb, query, query_nb, dim, k, dist, ind);
+
+  // Both dist and ind are k by query_nb. Column c has the nearest neighbors of
+  // query c.
+
+  FILE *file_knn_dist = fopen("dist.txt", "w");
+  for (int i = 0; i < query_nb; ++i) {
+    for (int j = 0; j < k; ++j) {
+      if (j > 0) fprintf(file_knn_dist, " ");
+      fprintf(file_knn_dist, "%.5f", dist[j * query_nb + i]);
+    }
+    fprintf(file_knn_dist, "\n");
+  }
+  fclose(file_knn_dist);
+
+  FILE *file_knn_idx = fopen("idx.txt", "w");
+  for (int i = 0; i < query_nb; ++i) {
+    for (int j = 0; j < k; ++j) {
+      if (j > 0) fprintf(file_knn_idx, " ");
+      fprintf(file_knn_idx, "%d", ind[j * query_nb + i] - 1);  // convert to indexing from 0
+    }
+    fprintf(file_knn_idx, "\n");
+  }
+  fclose(file_knn_idx);
 
   // Free memory
   free(ind);
