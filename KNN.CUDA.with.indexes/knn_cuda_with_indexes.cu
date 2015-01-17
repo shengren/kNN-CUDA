@@ -48,7 +48,7 @@
 #define MAX_TEXTURE_HEIGHT_IN_BYTES    32768
 #define MAX_PART_OF_FREE_MEMORY_USED   0.9
 #define BLOCK_DIM                      16
-
+#define NUM_ITERATION 10
 
 // Texture containing the reference points (if it is possible)
 texture<float, 2, cudaReadModeElementType> texA;
@@ -409,10 +409,14 @@ void knn(float* ref_host, int ref_width, float* query_host, int query_width, int
   cudaEventCreate(&start);
   cudaEventCreate(&stop);
   float elapsed;
+  float kernel1_time = 0.0f;
+  float kernel2_time = 0.0f;
+  float kernel3_time = 0.0f;
+
+  for (int iter = 1; iter <= NUM_ITERATION; ++iter) {
 
   // Split queries to fit in GPU memory
   for (int i=0; i<query_width; i+=max_nb_query_traited){
-    printf("i = %d:\n", i);
 
     // Number of query points considered
     actual_nb_query_width = min( (int)max_nb_query_traited, query_width-i );
@@ -450,7 +454,7 @@ void knn(float* ref_host, int ref_width, float* query_host, int query_width, int
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&elapsed, start, stop);
-    printf("cuComputeDistance* %.3f ms\n", elapsed);
+    kernel1_time += elapsed;
 
     // Kernel 2: Sort each column
     cudaEventRecord(start);
@@ -464,7 +468,7 @@ void knn(float* ref_host, int ref_width, float* query_host, int query_width, int
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&elapsed, start, stop);
-    printf("cuInsertionSort %.3f ms\n", elapsed);
+    kernel2_time += elapsed;
 
     // Kernel 3: Compute square root of k first elements
     cudaEventRecord(start);
@@ -478,12 +482,18 @@ void knn(float* ref_host, int ref_width, float* query_host, int query_width, int
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&elapsed, start, stop);
-    printf("cuParallelSqrt %.3f ms\n", elapsed);
+    kernel3_time += elapsed;
 
     // Memory copy of output from device to host
     cudaMemcpy2D(&dist_host[i], query_width*size_of_float, dist_dev, query_pitch_in_bytes, actual_nb_query_width*size_of_float, k, cudaMemcpyDeviceToHost);
     cudaMemcpy2D(&ind_host[i],  query_width*size_of_int,   ind_dev,  ind_pitch_in_bytes,   actual_nb_query_width*size_of_int,   k, cudaMemcpyDeviceToHost);
   }
+
+  }
+
+  printf("cuComputeDistance* %.3f ms\n", kernel1_time / NUM_ITERATION);
+  printf("cuInsertionSort %.3f ms\n", kernel2_time / NUM_ITERATION);
+  printf("cuParallelSqrt %.3f ms\n", kernel3_time / NUM_ITERATION);
 
   cudaEventDestroy(start);
   cudaEventDestroy(stop);
