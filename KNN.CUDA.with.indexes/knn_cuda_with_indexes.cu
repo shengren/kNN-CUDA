@@ -491,9 +491,15 @@ void knn(float* ref_host, int ref_width, float* query_host, int query_width, int
 
   }
 
+  printf("Average time of %d runs:\n", NUM_ITERATION);
+
   printf("cuComputeDistance* %.3f ms\n", kernel1_time / NUM_ITERATION);
   printf("cuInsertionSort %.3f ms\n", kernel2_time / NUM_ITERATION);
   printf("cuParallelSqrt %.3f ms\n", kernel3_time / NUM_ITERATION);
+
+  printf("DistanceComputation %.3f ms\n",
+      (kernel1_time + kernel3_time) / NUM_ITERATION);
+  printf("NeighborSelection %.3f ms\n", kernel2_time / NUM_ITERATION);
 
   cudaEventDestroy(start);
   cudaEventDestroy(stop);
