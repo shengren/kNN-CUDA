@@ -49,7 +49,7 @@
 #define MAX_TEXTURE_HEIGHT_IN_BYTES    32768
 #define MAX_PART_OF_FREE_MEMORY_USED   0.9
 #define BLOCK_DIM                      16
-
+#define NUM_ITERATION 10
 
 
 //-----------------------------------------------------------------------------------------------//
@@ -325,6 +325,8 @@ void knn(float* ref_host, int ref_width, float* query_host, int query_width, int
   float kernel5_time = 0.0f;
   float kernel6_time = 0.0f;
 
+  for (int iter = 1; iter <= NUM_ITERATION; ++iter) {
+
   // Computation of reference square norm
   dim3 ref_grid(ref_width/256, 1, 1);
   dim3 ref_thread(256, 1, 1);
@@ -427,12 +429,21 @@ void knn(float* ref_host, int ref_width, float* query_host, int query_width, int
     cudaMemcpy2D(&ind_host[i],  query_width*size_of_int,   ind_dev,  ind_pitch_in_bytes,   actual_nb_query_width*size_of_int,   k, cudaMemcpyDeviceToHost);
   }
 
-  printf("cuComputeNorm(ref) %.3f ms\n", kernel1_time);
-  printf("cuComputeNorm(query) %.3f ms\n", kernel2_time);
-  printf("cublasSgemm %.3f ms\n", kernel3_time);
-  printf("cuAddRNorm %.3f ms\n", kernel4_time);
-  printf("cuInsertionSort %.3f ms\n", kernel5_time);
-  printf("cuAddQNormAndSqrt %.3f ms\n", kernel6_time);
+  }
+
+  printf("Average time of %d runs:\n", NUM_ITERATION);
+
+  printf("cuComputeNorm(ref) %.3f ms\n", kernel1_time / NUM_ITERATION);
+  printf("cuComputeNorm(query) %.3f ms\n", kernel2_time / NUM_ITERATION);
+  printf("cublasSgemm %.3f ms\n", kernel3_time / NUM_ITERATION);
+  printf("cuAddRNorm %.3f ms\n", kernel4_time / NUM_ITERATION);
+  printf("cuInsertionSort %.3f ms\n", kernel5_time / NUM_ITERATION);
+  printf("cuAddQNormAndSqrt %.3f ms\n", kernel6_time / NUM_ITERATION);
+
+  float dist_comp_time =
+      kernel1_time + kernel2_time + kernel3_time + kernel4_time + kernel6_time;
+  printf("DistanceComputation %.3f ms\n", dist_comp_time / NUM_ITERATION);
+  printf("NeighborSelection %.3f ms\n", kernel5_time / NUM_ITERATION);
 
   cudaEventDestroy(start);
   cudaEventDestroy(stop);
@@ -514,10 +525,10 @@ int main(void){
   float* query;               // Pointer to query point array
   float* dist;                // Pointer to distance array
   int*   ind;                 // Pointer to index array
-  int    ref_nb     = 4096;   // Reference point number, max=65535
-  int    query_nb   = 4096;   // Query point number,     max=65535
-  int    dim        = 32;     // Dimension of points,    max=8192
-  int    k          = 20;     // Nearest neighbors to consider
+  int    ref_nb     = 100000; // Reference point number, max=65535
+  int    query_nb   = 100;    // Query point number,     max=65535
+  int    dim        = 100;    // Dimension of points,    max=8192
+  int    k          = 100;    // Nearest neighbors to consider
   int    i;
 
   // Memory allocation
