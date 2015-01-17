@@ -278,6 +278,7 @@ void knn(float* ref_host, int ref_width, float* query_host, int query_width, int
   // Determine maximum number of query that can be treated
   max_nb_query_traited = ( memory_free * MAX_PART_OF_FREE_MEMORY_USED - size_of_float * ref_width*(height+1) ) / ( size_of_float * (height + ref_width + 1) + size_of_int * k);
   max_nb_query_traited = min( query_width, ((int)max_nb_query_traited / 16) * 16 );
+  printf("max_nb_query_traited = %d\n", (int)max_nb_query_traited);
 
   // Allocation of global memory for query points and for distances
   result = cudaMallocPitch( (void **) &query_dev, &query_pitch_in_bytes, max_nb_query_traited * size_of_float, height + ref_width + 1);
@@ -312,11 +313,34 @@ void knn(float* ref_host, int ref_width, float* query_host, int query_width, int
   // Memory copy of ref_host in ref_dev
   result = cudaMemcpy2D(ref_dev, ref_pitch_in_bytes, ref_host, ref_width*size_of_float, ref_width*size_of_float, height, cudaMemcpyHostToDevice);
 
+  cudaError_t err;
+  cudaEvent_t start, stop;
+  cudaEventCreate(&start);
+  cudaEventCreate(&stop);
+  float elapsed;
+  float kernel1_time = 0.0f;
+  float kernel2_time = 0.0f;
+  float kernel3_time = 0.0f;
+  float kernel4_time = 0.0f;
+  float kernel5_time = 0.0f;
+  float kernel6_time = 0.0f;
+
   // Computation of reference square norm
   dim3 ref_grid(ref_width/256, 1, 1);
   dim3 ref_thread(256, 1, 1);
   if (ref_width%256 != 0) ref_grid.x += 1;
+  cudaEventRecord(start);
   cuComputeNorm<<<ref_grid,ref_thread>>>(ref_dev, ref_width, ref_pitch, height, ref_norm);
+  cudaDeviceSynchronize();
+  err = cudaGetLastError();
+  if (err != cudaSuccess) {
+    printf("CUDA error: %s\n", cudaGetErrorString(err));
+    return;
+  }
+  cudaEventRecord(stop);
+  cudaEventSynchronize(stop);
+  cudaEventElapsedTime(&elapsed, start, stop);
+  kernel1_time += elapsed;
 
   // Split queries to fit in GPU memory
   for (int i=0; i<query_width; i+=max_nb_query_traited){
@@ -331,28 +355,87 @@ void knn(float* ref_host, int ref_width, float* query_host, int query_width, int
     dim3 query_grid_1(actual_nb_query_width/256, 1, 1);
     dim3 query_thread_1(256, 1, 1);
     if (actual_nb_query_width%256 != 0) query_grid_1.x += 1;
+    cudaEventRecord(start);
     cuComputeNorm<<<query_grid_1,query_thread_1>>>(query_dev, actual_nb_query_width, query_pitch, height, query_norm);
+    cudaDeviceSynchronize();
+    err = cudaGetLastError();
+    if (err != cudaSuccess) {
+      printf("CUDA error: %s\n", cudaGetErrorString(err));
+      return;
+    }
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&elapsed, start, stop);
+    kernel2_time += elapsed;
 
     // Computation of Q*transpose(R)
+    cudaEventRecord(start);
     cublasSgemm('n', 't', (int)query_pitch, (int)ref_pitch, height, (float)-2.0, query_dev, query_pitch, ref_dev, ref_pitch, (float)0.0, dist_dev, query_pitch);
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&elapsed, start, stop);
+    kernel3_time += elapsed;
 
     // Add R norm to distances
     dim3 query_grid_2(actual_nb_query_width/16, ref_width/16, 1);
     dim3 query_thread_2(16, 16, 1);
     if (actual_nb_query_width%16 != 0) query_grid_2.x += 1;
     if (ref_width%16 != 0) query_grid_2.y += 1;
+    cudaEventRecord(start);
     cuAddRNorm<<<query_grid_2,query_thread_2>>>(dist_dev, actual_nb_query_width, query_pitch, ref_width, ref_norm);
+    cudaDeviceSynchronize();
+    err = cudaGetLastError();
+    if (err != cudaSuccess) {
+      printf("CUDA error: %s\n", cudaGetErrorString(err));
+      return;
+    }
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&elapsed, start, stop);
+    kernel4_time += elapsed;
 
     // Sort each column
+    cudaEventRecord(start);
     cuInsertionSort<<<query_grid_1,query_thread_1>>>(dist_dev, query_pitch, ind_dev, ind_pitch, actual_nb_query_width, ref_width, k);
+    cudaDeviceSynchronize();
+    err = cudaGetLastError();
+    if (err != cudaSuccess) {
+      printf("CUDA error: %s\n", cudaGetErrorString(err));
+      return;
+    }
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&elapsed, start, stop);
+    kernel5_time += elapsed;
 
     // Add Q norm and compute Sqrt ONLY ON ROW K-1
+    cudaEventRecord(start);
     cuAddQNormAndSqrt<<<query_grid_2,query_thread_2>>>( dist_dev, actual_nb_query_width, query_pitch, query_norm, k);
+    cudaDeviceSynchronize();
+    err = cudaGetLastError();
+    if (err != cudaSuccess) {
+      printf("CUDA error: %s\n", cudaGetErrorString(err));
+      return;
+    }
+    cudaEventRecord(stop);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&elapsed, start, stop);
+    kernel6_time += elapsed;
 
     // Memory copy of output from device to host
     cudaMemcpy2D(&dist_host[i], query_width*size_of_float, dist_dev, query_pitch_in_bytes, actual_nb_query_width*size_of_float, k, cudaMemcpyDeviceToHost);
     cudaMemcpy2D(&ind_host[i],  query_width*size_of_int,   ind_dev,  ind_pitch_in_bytes,   actual_nb_query_width*size_of_int,   k, cudaMemcpyDeviceToHost);
   }
+
+  printf("cuComputeNorm(ref) %.3f ms\n", kernel1_time);
+  printf("cuComputeNorm(query) %.3f ms\n", kernel2_time);
+  printf("cublasSgemm %.3f ms\n", kernel3_time);
+  printf("cuAddRNorm %.3f ms\n", kernel4_time);
+  printf("cuInsertionSort %.3f ms\n", kernel5_time);
+  printf("cuAddQNormAndSqrt %.3f ms\n", kernel6_time);
+
+  cudaEventDestroy(start);
+  cudaEventDestroy(stop);
 
   // Free memory
   cudaFree(ind_dev);
@@ -435,7 +518,6 @@ int main(void){
   int    query_nb   = 4096;   // Query point number,     max=65535
   int    dim        = 32;     // Dimension of points,    max=8192
   int    k          = 20;     // Nearest neighbors to consider
-  int    iterations = 100;
   int    i;
 
   // Memory allocation
@@ -449,31 +531,17 @@ int main(void){
   for (i=0 ; i<ref_nb   * dim ; i++) ref[i]    = (float)rand() / (float)RAND_MAX;
   for (i=0 ; i<query_nb * dim ; i++) query[i]  = (float)rand() / (float)RAND_MAX;
 
-  // Variables for duration evaluation
-  cudaEvent_t start, stop;
-  cudaEventCreate(&start);
-  cudaEventCreate(&stop);
-  float elapsed_time;
-
   // Display informations
   printf("Number of reference points      : %6d\n", ref_nb  );
   printf("Number of query points          : %6d\n", query_nb);
   printf("Dimension of points             : %4d\n", dim     );
   printf("Number of neighbors to consider : %4d\n", k       );
-  printf("Processing kNN search           :"                );
+  printf("Processing kNN search           : \n"             );
 
   // Call kNN search CUDA
-  cudaEventRecord(start, 0);
-  for (i=0; i<iterations; i++)
-    knn(ref, ref_nb, query, query_nb, dim, k, dist, ind);
-  cudaEventRecord(stop, 0);
-  cudaEventSynchronize(stop);
-  cudaEventElapsedTime(&elapsed_time, start, stop);
-  printf(" done in %f s for %d iterations (%f s by iteration)\n", elapsed_time/1000, iterations, elapsed_time/(iterations*1000));
+  knn(ref, ref_nb, query, query_nb, dim, k, dist, ind);
 
-  // Destroy cuda event object and free memory
-  cudaEventDestroy(start);
-  cudaEventDestroy(stop);
+  // Free memory
   free(ind);
   free(dist);
   free(query);
