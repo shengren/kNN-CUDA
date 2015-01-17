@@ -28,7 +28,7 @@
 
 
 // If the code is used in Matlab, set MATLAB_CODE to 1. Otherwise, set MATLAB_CODE to 0.
-#define MATLAB_CODE 1
+#define MATLAB_CODE 0
 
 
 // Includes
@@ -255,15 +255,15 @@ void knn(float* ref_host, int ref_width, float* query_host, int query_width, int
   int          *ind_dev;
   cudaError_t  result;
   size_t       query_pitch;
-  size_t	     query_pitch_in_bytes;
+  size_t       query_pitch_in_bytes;
   size_t       ref_pitch;
   size_t       ref_pitch_in_bytes;
   size_t       ind_pitch;
   size_t       ind_pitch_in_bytes;
   size_t       max_nb_query_traited;
   size_t       actual_nb_query_width;
-  unsigned int memory_total;
-  unsigned int memory_free;
+  size_t       memory_total;
+  size_t       memory_free;
 
   // CUDA Initialisation
   cuInit(0);
@@ -277,7 +277,7 @@ void knn(float* ref_host, int ref_width, float* query_host, int query_width, int
 
   // Determine maximum number of query that can be treated
   max_nb_query_traited = ( memory_free * MAX_PART_OF_FREE_MEMORY_USED - size_of_float * ref_width*(height+1) ) / ( size_of_float * (height + ref_width + 1) + size_of_int * k);
-  max_nb_query_traited = min( query_width, (max_nb_query_traited / 16) * 16 );
+  max_nb_query_traited = min( query_width, ((int)max_nb_query_traited / 16) * 16 );
 
   // Allocation of global memory for query points and for distances
   result = cudaMallocPitch( (void **) &query_dev, &query_pitch_in_bytes, max_nb_query_traited * size_of_float, height + ref_width + 1);
@@ -322,7 +322,7 @@ void knn(float* ref_host, int ref_width, float* query_host, int query_width, int
   for (int i=0; i<query_width; i+=max_nb_query_traited){
 
     // Number of query points considered
-    actual_nb_query_width = min( max_nb_query_traited, query_width-i );
+    actual_nb_query_width = min( (int)max_nb_query_traited, query_width-i );
 
     // Copy of part of query actually being treated
     cudaMemcpy2D(query_dev, query_pitch_in_bytes, &query_host[i], query_width*size_of_float, actual_nb_query_width*size_of_float, height, cudaMemcpyHostToDevice);
