@@ -32,6 +32,7 @@
 
 
 // Includes
+#include <assert.h>
 #include <stdio.h>
 #include <math.h>
 #include "cuda.h"
@@ -196,7 +197,8 @@ __global__ void cuAddQNormAndSqrt(float *dist, int width, int pitch, float *q, i
   unsigned int xIndex = blockIdx.x * blockDim.x + threadIdx.x;
   unsigned int yIndex = blockIdx.y * blockDim.y + threadIdx.y;
   if (xIndex<width && yIndex<k)
-    dist[yIndex*pitch + xIndex] = sqrt(dist[yIndex*pitch + xIndex] + q[xIndex]);
+    // dist[yIndex*pitch + xIndex] = sqrt(dist[yIndex*pitch + xIndex] + q[xIndex]);
+    dist[yIndex*pitch + xIndex] = dist[yIndex*pitch + xIndex] + q[xIndex];
 }
 
 
@@ -278,7 +280,7 @@ void knn(float* ref_host, int ref_width, float* query_host, int query_width, int
   // Determine maximum number of query that can be treated
   max_nb_query_traited = ( memory_free * MAX_PART_OF_FREE_MEMORY_USED - size_of_float * ref_width*(height+1) ) / ( size_of_float * (height + ref_width + 1) + size_of_int * k);
   max_nb_query_traited = min( query_width, ((int)max_nb_query_traited / 16) * 16 );
-  printf("max_nb_query_traited = %d\n", (int)max_nb_query_traited);
+  // printf("max_nb_query_traited = %d\n", (int)max_nb_query_traited);
 
   // Allocation of global memory for query points and for distances
   result = cudaMallocPitch( (void **) &query_dev, &query_pitch_in_bytes, max_nb_query_traited * size_of_float, height + ref_width + 1);
@@ -431,19 +433,26 @@ void knn(float* ref_host, int ref_width, float* query_host, int query_width, int
 
   }
 
-  printf("Average time of %d runs:\n", NUM_ITERATION);
+  // printf("Average time of %d runs:\n", NUM_ITERATION);
 
-  printf("cuComputeNorm(ref) %.3f ms\n", kernel1_time / NUM_ITERATION);
-  printf("cuComputeNorm(query) %.3f ms\n", kernel2_time / NUM_ITERATION);
-  printf("cublasSgemm %.3f ms\n", kernel3_time / NUM_ITERATION);
-  printf("cuAddRNorm %.3f ms\n", kernel4_time / NUM_ITERATION);
-  printf("cuInsertionSort %.3f ms\n", kernel5_time / NUM_ITERATION);
-  printf("cuAddQNormAndSqrt %.3f ms\n", kernel6_time / NUM_ITERATION);
+  // printf("cuComputeNorm(ref) %.3f ms\n", kernel1_time / NUM_ITERATION);
+  // printf("cuComputeNorm(query) %.3f ms\n", kernel2_time / NUM_ITERATION);
+  // printf("cublasSgemm %.3f ms\n", kernel3_time / NUM_ITERATION);
+  // printf("cuAddRNorm %.3f ms\n", kernel4_time / NUM_ITERATION);
+  // printf("cuInsertionSort %.3f ms\n", kernel5_time / NUM_ITERATION);
+  // printf("cuAddQNormAndSqrt %.3f ms\n", kernel6_time / NUM_ITERATION);
 
-  float dist_comp_time =
-      kernel1_time + kernel2_time + kernel3_time + kernel4_time + kernel6_time;
-  printf("DistanceComputation %.3f ms\n", dist_comp_time / NUM_ITERATION);
-  printf("NeighborSelection %.3f ms\n", kernel5_time / NUM_ITERATION);
+  // float dist_comp_time =
+  //     kernel1_time + kernel2_time + kernel3_time + kernel4_time + kernel6_time;
+  // printf("DistanceComputation %.3f ms\n", dist_comp_time / NUM_ITERATION);
+  // printf("NeighborSelection %.3f ms\n", kernel5_time / NUM_ITERATION);
+
+  float compute_distance_time = (kernel1_time + kernel2_time + kernel3_time +
+                                kernel4_time + kernel6_time) / NUM_ITERATION;
+  float select_neighbor_time = kernel5_time / NUM_ITERATION;
+
+  printf("%d,%d,%d,%d,%.3f,%.3f\n", height, query_width, ref_width, k,
+         compute_distance_time, select_neighbor_time);
 
   cudaEventDestroy(start);
   cudaEventDestroy(stop);
@@ -518,39 +527,45 @@ void mexFunction(int nlhs, mxArray *plhs[], int nrhs, const mxArray *prhs[]){
 /**
  * Example of use of kNN search CUDA.
  */
-int main(int argc, char **argv){
+int main(int argc, char **argv) {
+  if (argc == 1) {
+    printf("./knn_cublas_with_indexes (dim) (query_nb) (ref_nb) (k) "
+           "(query_file) (reference_file)\n");
+    return 0;
+  }
+  assert(argc == 7);
 
   // Variables and parameters
   float* ref;                 // Pointer to reference point array
   float* query;               // Pointer to query point array
   float* dist;                // Pointer to distance array
   int*   ind;                 // Pointer to index array
-  int    ref_nb     = 100000; // Reference point number, max=65535
-  int    query_nb   = 100;    // Query point number,     max=65535
-  int    dim        = 100;    // Dimension of points,    max=8192
-  int    k          = 100;    // Nearest neighbors to consider
+  int    dim        = atoi(argv[1]);  // Dimension of points,    max=8192
+  int    query_nb   = atoi(argv[2]);  // Query point number,     max=65535
+  int    ref_nb     = atoi(argv[3]);  // Reference point number, max=65535
+  int    k          = atoi(argv[4]);  // Nearest neighbors to consider
 
   // Memory allocation
-  ref    = (float *) malloc(ref_nb   * dim * sizeof(float));
   query  = (float *) malloc(query_nb * dim * sizeof(float));
+  ref    = (float *) malloc(ref_nb   * dim * sizeof(float));
   dist   = (float *) malloc(query_nb * k * sizeof(float));
-  ind    = (int *)   malloc(query_nb * k * sizeof(float));
+  ind    = (int *)   malloc(query_nb * k * sizeof(int));
 
   // Init
-  FILE *file_reference = fopen(argv[1], "rb");
-  fread(ref, sizeof(float), ref_nb * dim, file_reference);
-  fclose(file_reference);
-
-  FILE *file_query = fopen(argv[2], "rb");
+  FILE *file_query = fopen(argv[5], "rb");
   fread(query, sizeof(float), query_nb * dim, file_query);
   fclose(file_query);
 
+  FILE *file_reference = fopen(argv[6], "rb");
+  fread(ref, sizeof(float), ref_nb * dim, file_reference);
+  fclose(file_reference);
+
   // Display informations
-  printf("Number of reference points      : %6d\n", ref_nb  );
-  printf("Number of query points          : %6d\n", query_nb);
-  printf("Dimension of points             : %4d\n", dim     );
-  printf("Number of neighbors to consider : %4d\n", k       );
-  printf("Processing kNN search           : \n"             );
+  // printf("Number of reference points      : %6d\n", ref_nb  );
+  // printf("Number of query points          : %6d\n", query_nb);
+  // printf("Dimension of points             : %4d\n", dim     );
+  // printf("Number of neighbors to consider : %4d\n", k       );
+  // printf("Processing kNN search           : \n"             );
 
   // Call kNN search CUDA
   knn(ref, ref_nb, query, query_nb, dim, k, dist, ind);
